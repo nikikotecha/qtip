@@ -12,7 +12,7 @@ tqdm>=4.66
 # Vendored model/qwen3*.py imports legacy transformers internals
 # (_prepare_4d_causal_attention_mask, ALL_LAYERNORM_LAYERS, ...) that are
 # removed in newer releases, so cap below 4.56.
-transformers>=4.51,<4.56
+transformers==4.51.3
 # Not pip-resolvable extras (install manually, in this order, AFTER torch):
 #   torch >= 2.4 (use the image's CUDA build; fork validated on torch 2.6)
 #   pip install fast-hadamard-transform          (builds CUDA ext from source)
