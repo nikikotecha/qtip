@@ -38,7 +38,8 @@ def main(args):
     print("loading model...")
     print("loaded model!")
     gpu_id = int(os.environ["LOCAL_RANK"])
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=False)
+    # use_fast=True: Qwen tokenizers are fast-only (slow path breaks/crawls)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
     tokenizer.pad_token = tokenizer.eos_token
 
     print("loading dataset...")

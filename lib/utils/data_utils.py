@@ -193,17 +193,37 @@ def wrap_tokenizer(tokenizer, x, ctx_size, truncate=True):
                      max_length=ctx_size)
 
 
+# Calibration dataset. togethercomputer/RedPajama-Data-1T-Sample was deleted
+# from the HF hub; FineWeb-Edu sample-10BT is the upstream author's recommended
+# replacement (Cornell-RelaxML/qtip#33). Streamed so no ~25GB download is
+# needed on ephemeral cloud boxes.
+CALIB_DATASET = 'HuggingFaceFW/fineweb-edu'
+CALIB_DATASET_CONFIG = 'sample-10BT'
+CALIB_SHUFFLE_SEED = 0
+CALIB_SHUFFLE_BUFFER = 100000
+
+
+def _calib_text_iter(seed=CALIB_SHUFFLE_SEED, buffer_size=CALIB_SHUFFLE_BUFFER):
+    dataset = load_dataset(CALIB_DATASET,
+                           name=CALIB_DATASET_CONFIG,
+                           split='train',
+                           streaming=True)
+    dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed)
+    for sample in dataset:
+        yield sample['text']
+
+
 def sample_rp1t(tokenizer, size=128, ctx_size=2048, nproc=1):
-    dataset = load_dataset('togethercomputer/RedPajama-Data-1T-Sample',
-                           split='train')
+    # name kept for backwards compatibility with callers; samples FineWeb-Edu
+    # (see CALIB_DATASET above), keeping only docs that fill ctx_size tokens.
+    texts = _calib_text_iter()
     devset = torch.zeros((size, ctx_size), dtype=torch.int64)
     saved = 0
     if nproc > 1:
         p = mp.Pool(nproc)
         while saved < size:
-            seqs = [(tokenizer, dataset[torch.randint(len(dataset),
-                                                      (size, ))]['text'],
-                     ctx_size) for _ in range(nproc)]
+            seqs = [(tokenizer, [next(texts) for _ in range(size)], ctx_size)
+                    for _ in range(nproc)]
             tokens = p.starmap(wrap_tokenizer, seqs)
             for i in range(len(tokens)):
                 lens = tokens[i].attention_mask.sum(dim=-1)
@@ -214,10 +234,10 @@ def sample_rp1t(tokenizer, size=128, ctx_size=2048, nproc=1):
                     devset[saved:saved + len(good)] = tokens[i].input_ids[good]
                     saved += len(good)
                     print(saved)
+        p.close()
     else:
         while saved < size:
-            tokens = tokenizer(dataset[torch.randint(len(dataset),
-                                                     (size, ))]['text'],
+            tokens = tokenizer([next(texts) for _ in range(size)],
                                return_tensors='pt',
                                truncation=True,
                                padding=True,
@@ -233,22 +253,24 @@ def sample_rp1t(tokenizer, size=128, ctx_size=2048, nproc=1):
 
 
 def sample_rp1t_concat(tokenizer, size=128, ctx_size=2048, nproc=1):
-    dataset = load_dataset('togethercomputer/RedPajama-Data-1T-Sample',
-                           split='train')
-    devset = torch.zeros((size, ctx_size), dtype=torch.int64)
-    concat = []
+    # name kept for backwards compatibility with callers; samples FineWeb-Edu
+    # (see CALIB_DATASET above) and concatenates docs into ctx_size sequences.
+    texts = _calib_text_iter()
+    chunks = []
+    n_tokens = 0
     p = mp.Pool(nproc)
-    while len(concat) < ctx_size * size:
-        seqs = [(tokenizer, dataset[torch.randint(len(dataset),
-                                                  (128, ))]['text'], -1, False)
+    while n_tokens < ctx_size * size:
+        seqs = [(tokenizer, [next(texts) for _ in range(128)], -1, False)
                 for _ in range(nproc)]
         tokens = p.starmap(wrap_tokenizer, seqs)
         for i in range(len(tokens)):
             lens = tokens[i].attention_mask.sum(dim=-1)
             for j in range(len(tokens[i].input_ids)):
-                concat += tokens[i].input_ids[j][:lens[j]]
-        print(len(concat), ctx_size * size)
-    concat = torch.tensor(concat)[:ctx_size * size]
+                chunks.append(tokens[i].input_ids[j][:lens[j]])
+                n_tokens += int(lens[j])
+        print(n_tokens, ctx_size * size)
+    p.close()
+    concat = torch.cat(chunks)[:ctx_size * size]
     return concat.reshape(size, ctx_size).contiguous()
 
 

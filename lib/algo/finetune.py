@@ -181,7 +181,29 @@ def quantize_finetune_decoder_layer(mixed_layer, quant_order, idx, cb, args,
                 args.scale_override)
             Wr /= Wscale
 
-        LRr, _ = utils.block_LDL(HRr, args.td_y)
+        # block_LDL returns None when the (regularized) Hessian is not
+        # positive definite (Cornell-RelaxML/qtip#8). Auto-retry with
+        # escalating extra diagonal regularization before giving up.
+        ldl = utils.block_LDL(HRr, args.td_y)
+        extra_reg = max(args.sigma_reg, 1e-2)
+        for _attempt in range(3):
+            if ldl is not None:
+                break
+            glog.warning(
+                f'{idx}_{name}: Hessian not positive definite with '
+                f'sigma_reg={args.sigma_reg}; retrying block_LDL with extra '
+                f'regularization {extra_reg}')
+            HRr = utils.regularize_H(HRr, extra_reg)
+            ldl = utils.block_LDL(HRr, args.td_y)
+            extra_reg *= 10
+        if ldl is None:
+            raise RuntimeError(
+                f'block_LDL failed for layer {idx}_{name}: Hessian is not '
+                f'positive definite even after extra regularization up to '
+                f'{extra_reg / 10}. Rerun with a larger --sigma_reg '
+                f'(current: {args.sigma_reg}) or recollect Hessians with '
+                f'more calibration data.')
+        LRr, _ = ldl
         diag = torch.arange(n, device=LRr.device)
         LRr[diag, diag] = 0
 
