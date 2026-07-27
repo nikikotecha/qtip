@@ -124,8 +124,21 @@ def main(args):
         glog.info(f'loaded layer {ii}')
             
     glog.info(f'saving model...')
-    model.config.model_type = 'qwen3'
     model.save_pretrained(args.hf_output_path, safe_serialization=True)
+    tokenizer.save_pretrained(args.hf_output_path)
+
+    # save_pretrained serializes the config CLASS's model_type (the Qwen2Config
+    # fallback writes 'qwen2') and can drop _name_or_path; both break the
+    # model_from_hf_path reload. Patch the JSON on disk, which survives any
+    # config-class games.
+    import json as _json
+    _cfg_path = os.path.join(args.hf_output_path, 'config.json')
+    with open(_cfg_path) as _f:
+        _cfg = _json.load(_f)
+    _cfg['model_type'] = 'qwen3'
+    _cfg['_name_or_path'] = model_config._name_or_path or 'Qwen/Qwen3-1.7B'
+    with open(_cfg_path, 'w') as _f:
+        _json.dump(_cfg, _f, indent=2)
 
     del model
 
